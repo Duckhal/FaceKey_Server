@@ -10,13 +10,15 @@ export class Member {
   @Column()
   name: string;
 
-  @Column({ default: true })
-  is_active: boolean;
+  @Column()
+  role: string;
 
   @CreateDateColumn()
   created_at: Date;
 
-  @OneToMany(() => FaceData, (faceData) => faceData.member)
+  @OneToMany(() => FaceData, (faceData) => faceData.member, {
+    onDelete: 'CASCADE',
+  })
   faceData: FaceData[];
 
   @OneToMany(() => AccessLog, (log) => log.member)

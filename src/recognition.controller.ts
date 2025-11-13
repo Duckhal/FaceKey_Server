@@ -60,6 +60,12 @@ export class RecognitionController {
     
     if (!aiResponse.success) {
       console.log('AI Service báo lỗi:', aiResponse.detail);
+      try {
+        fs.unlinkSync(file.path);
+        console.log(`Đã tự động xóa ảnh rác: ${file.filename}`);
+      } catch (err) {
+        console.log(`Lỗi khi xóa file ${file.path}:`, err);
+      }
       this.appGateway.notifyUi({ message: 'Không nhận diện được khuôn mặt' });
       return { message: 'Không nhận diện được khuôn mặt' };
     }
@@ -76,9 +82,7 @@ export class RecognitionController {
     const bestMatch = this.findBestMatch(newEmbedding, allRegisteredFaces);
 
     let logEntry;
-    
-    // Đặt một ngưỡng (threshold) cho FaceNet (L2 distance)
-    // (Bạn nên tinh chỉnh ngưỡng này, 0.6 là khá an toàn)
+
     const RECOGNITION_THRESHOLD = 0.6; 
 
     if (bestMatch && bestMatch.distance < RECOGNITION_THRESHOLD) {
