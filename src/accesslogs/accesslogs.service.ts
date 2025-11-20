@@ -1,26 +1,58 @@
-import { Injectable } from '@nestjs/common';
-import { CreateAccesslogDto } from './dto/create-accesslog.dto';
-import { UpdateAccesslogDto } from './dto/update-accesslog.dto';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AccessLog } from './entities/accesslog.entity';
+import * as fs from 'fs';
 
 @Injectable()
 export class AccesslogsService {
-  create(createAccesslogDto: CreateAccesslogDto) {
-    return 'This action adds a new accesslog';
+  private readonly baseUrl = 'http://192.168.7.16:3000';
+
+  constructor(
+    @InjectRepository(AccessLog)
+    private readonly accessLogRepository: Repository<AccessLog>,
+  ) {}
+
+  async findAll() {
+    const logs = await this.accessLogRepository.find({
+      order: { timestamp: 'DESC' },
+      relations: ['member'],
+    });
+
+    return logs.map((log) => ({
+      ...log,
+      snapshot_url: log.snapshot_url
+        ? `${this.baseUrl}/${log.snapshot_url.replace(/\\/g, '/')}`
+        : null,
+    }));
   }
 
-  findAll() {
-    return `This action returns all accesslogs`;
-  }
+  async clearAll() {
+    try {
+      const logs = await this.accessLogRepository.find();
 
-  findOne(id: number) {
-    return `This action returns a #${id} accesslog`;
-  }
+      logs.forEach((log) => {
+        if (log.snapshot_url) {
+          try {
+            if (fs.existsSync(log.snapshot_url)) {
+              fs.unlinkSync(log.snapshot_url);
+              console.log(`Đã xóa file: ${log.snapshot_url}`);
+            }
+          } catch (err) {
+            console.error(
+              `Không xóa được file ${log.snapshot_url}:`,
+              err.message,
+            );
+          }
+        }
+      });
 
-  update(id: number, updateAccesslogDto: UpdateAccesslogDto) {
-    return `This action updates a #${id} accesslog`;
-  }
+      await this.accessLogRepository.createQueryBuilder().delete().execute();
 
-  remove(id: number) {
-    return `This action removes a #${id} accesslog`;
+      return { message: 'Đã xóa toàn bộ lịch sử và ảnh.' };
+    } catch (error) {
+      console.error('!!! LỖI NGHIÊM TRỌNG KHI XÓA LOGS !!!', error);
+      throw new InternalServerErrorException('Lỗi khi xóa logs');
+    }
   }
 }

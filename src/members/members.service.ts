@@ -11,9 +11,8 @@ import FormData = require('form-data');
 
 @Injectable()
 export class MembersService {
+  private readonly baseUrl = 'http://192.168.7.16:3000';
 
-  private readonly baseUrl = 'http://192.168.145.16:3000';
-  
   constructor(
     @InjectRepository(Member)
     private readonly memberRepository: Repository<Member>,
@@ -64,7 +63,7 @@ export class MembersService {
     // 3. Tạo FaceData
     const newFaceData = this.faceDataRepository.create({
       member: savedMember,
-      face_encoding: Buffer.from(JSON.stringify(embedding)), 
+      face_encoding: Buffer.from(JSON.stringify(embedding)),
       image_url: file.path,
     });
     await this.faceDataRepository.save(newFaceData);
@@ -75,7 +74,7 @@ export class MembersService {
   /**
    * API: Lấy tất cả member (kèm avatar)
    */
-async findAll(): Promise<any[]> {
+  async findAll(): Promise<any[]> {
     const members = await this.memberRepository.find({
       relations: {
         faceData: true,
@@ -102,7 +101,7 @@ async findAll(): Promise<any[]> {
   /**
    * API: Lấy 1 member (kèm avatar)
    */
-async findOne(id: number): Promise<any> {
+  async findOne(id: number): Promise<any> {
     const member = await this.memberRepository.findOne({
       where: { member_id: id },
       relations: {
@@ -187,7 +186,6 @@ async findOne(id: number): Promise<any> {
    * API: Xóa member
    */
   async remove(id: number): Promise<void> {
-    
     // 1. Tìm member VÀ các faceData liên quan
     const member = await this.memberRepository.findOne({
       where: { member_id: id },
