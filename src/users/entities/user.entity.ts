@@ -17,4 +17,10 @@ export class User {
 
   @OneToMany(() => Member, (member) => member.user)
   members: Member[];
+
+  @Column({ type: 'varchar', nullable: true })
+  reset_otp: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  reset_otp_expiry: Date | null;
 }
