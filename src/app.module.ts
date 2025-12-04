@@ -8,6 +8,7 @@ import { MembersModule } from './members/members.module';
 import { FacedataModule } from './facedata/facedata.module';
 import { AccesslogsModule } from './accesslogs/accesslogs.module';
 import { AuthModule } from './auth/auth.module';
+import { JwtStrategy } from './auth/jwt.strategy';
 import { User } from './users/entities/user.entity';
 import { Member } from './members/entities/member.entity';
 import { FaceData } from './facedata/entities/facedata.entity';
@@ -20,7 +21,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 
 @Module({
   imports: [
-    ConfigModule.forRoot(),
+    ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',
       host: process.env.DB_HOST,
@@ -38,19 +39,20 @@ import { ServeStaticModule } from '@nestjs/serve-static';
     AccesslogsModule,
     AuthModule,
 
-    HttpModule, 
+    HttpModule,
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'uploads'), 
+      rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
     }),
     TypeOrmModule.forFeature([FaceData, AccessLog]),
   ],
 
   controllers: [
-    RecognitionController, // Controller nhận ảnh từ ESP32-CAM
+    RecognitionController, // Controller received from ESP32-CAM
   ],
   providers: [
-    AppGateway, // Provider cho WebSocket (gửi lệnh đi)
+    AppGateway, // Provider for WebSocket (sending commands)
+    JwtStrategy,
   ],
 })
 export class AppModule {}

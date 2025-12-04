@@ -10,21 +10,21 @@ import {
   HttpCode,
   HttpStatus,
   UseInterceptors,
-  UploadedFile, 
+  UploadedFile,
+  UseGuards,
+  Request,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer'; 
+import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { MembersService } from './members.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('members')
+@UseGuards(JwtAuthGuard)
 export class MembersController {
   constructor(private readonly membersService: MembersService) {}
 
-  /**
-   * API 1: Đăng ký member mới
-   * POST /members/register-face
-   */
   @Post('register-face')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -35,40 +35,32 @@ export class MembersController {
             .fill(null)
             .map(() => Math.round(Math.random() * 16).toString(16))
             .join('');
-          cb(null, `reg-${Date.now()}-${randomName}${extname(file.originalname)}`);
+          cb(
+            null,
+            `reg-${Date.now()}-${randomName}${extname(file.originalname)}`,
+          );
         },
       }),
     }),
   )
   async registerFace(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { name: string; role: string }, // Nhận name/role từ FormData
+    @Body() body: { name: string; role: string },
+    @Request() req,
   ) {
-    return this.membersService.registerFace(body, file);
+    return this.membersService.registerFace(body, file, req.user.userId);
   }
 
-  /**
-   * API: Lấy tất cả member
-   * GET /members
-   */
   @Get()
-  async findAll() {
-    return this.membersService.findAll();
+  async findAll(@Request() req) {
+    return this.membersService.findAll(req.user.userId);
   }
 
-  /**
-   * API: Lấy 1 member
-   * GET /members/:id
-   */
   @Get(':id')
-  async findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.membersService.findOne(id);
+  async findOne(@Param('id', ParseIntPipe) id: number, @Request() req) {
+    return this.membersService.findOne(id, req.user.userId);
   }
 
-  /**
-   * API: Cập nhật member
-   * PATCH /members/update/:id)
-   */
   @Patch('update/:id')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -79,26 +71,26 @@ export class MembersController {
             .fill(null)
             .map(() => Math.round(Math.random() * 16).toString(16))
             .join('');
-          cb(null, `update-${Date.now()}-${randomName}${extname(file.originalname)}`);
+          cb(
+            null,
+            `update-${Date.now()}-${randomName}${extname(file.originalname)}`,
+          );
         },
       }),
     }),
   )
   async update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: { name: string; role: string }, // Nhận name/role
-    @UploadedFile() file: Express.Multer.File, // Nhận file (có thể undefined)
+    @Body() body: { name: string; role: string },
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req,
   ) {
-    return this.membersService.update(id, body, file);
+    return this.membersService.update(id, body, file, req.user.userId);
   }
 
-  /**
-   * API: Xóa member
-   * DELETE /members/delete/:id
-   */
   @Delete('delete/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    return this.membersService.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @Request() req) {
+    return this.membersService.remove(id, req.user.userId);
   }
 }

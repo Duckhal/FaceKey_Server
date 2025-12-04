@@ -13,15 +13,15 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { FaceData } from './facedata/entities/facedata.entity'
+import { FaceData } from './facedata/entities/facedata.entity';
 import { AccessLog } from './accesslogs/entities/accesslog.entity';
+import { AI_SERVICE_URL } from 'ip_config';
 
 import FormData = require('form-data');
 import * as fs from 'fs';
 
 @Controller('api')
 export class RecognitionController {
-  
   constructor(
     private readonly appGateway: AppGateway,
     private readonly httpService: HttpService,
@@ -34,59 +34,62 @@ export class RecognitionController {
   @Post('recognize')
   @UseInterceptors(
     FileInterceptor('file', {
-      // 1. Lưu ảnh snapshot lại (vào thư mục 'uploads/logs')
+      // 1. Save snapshot image (to 'uploads/logs' directory)
       storage: diskStorage({
-        destination: './uploads/logs', // Thư mục lưu log ảnh
+        destination: './uploads/logs',
         filename: (req, file, cb) => {
           const randomName = Array(16)
             .fill(null)
             .map(() => Math.round(Math.random() * 16).toString(16))
             .join('');
-          cb(null, `snap-${Date.now()}-${randomName}${extname(file.originalname)}`);
+          cb(
+            null,
+            `snap-${Date.now()}-${randomName}${extname(file.originalname)}`,
+          );
         },
       }),
-    }),)
+    }),
+  )
   async handleRecognition(@UploadedFile() file: Express.Multer.File) {
-    
-    console.log('Ảnh snapshot đã nhận:', file.filename);
+    console.log('Snapshot image received:', file.filename);
 
     let aiResponse;
     try {
       aiResponse = await this.realAiServiceCall(file.path);
     } catch (error) {
-      console.error('Lỗi khi gọi AI Service:', error.message);
-      return { message: 'Lỗi khi gọi AI Service' };
+      console.error('Error calling AI Service:', error.message);
+      return { message: 'Error calling AI Service' };
     }
-    
+
     if (!aiResponse.success) {
-      console.log('AI Service báo lỗi:', aiResponse.detail);
+      console.log('AI Service reported error:', aiResponse.detail);
       try {
         fs.unlinkSync(file.path);
-        console.log(`Đã tự động xóa ảnh rác: ${file.filename}`);
+        console.log(`Automatically deleted junk image: ${file.filename}`);
       } catch (err) {
-        console.log(`Lỗi khi xóa file ${file.path}:`, err);
+        console.log(`Error deleting file ${file.path}:`, err);
       }
-      this.appGateway.notifyUi({ message: 'Không nhận diện được khuôn mặt' });
-      return { message: 'Không nhận diện được khuôn mặt' };
+      this.appGateway.notifyUi({ message: 'Face not recognized' });
+      return { message: 'Face not recognized' };
     }
 
     const newEmbedding: number[] = aiResponse.embedding;
 
-    // 3. Xử lý kết quả từ AI
-    // Lấy tất cả khuôn mặt đã đăng ký từ DB
+    // 3. Process AI results
+    // Get all registered faces from DB
     const allRegisteredFaces = await this.faceDataRepository.find({
-      relations: ['member'], // Lấy luôn thông tin 'member'
+      relations: ['member'], // Also get 'member' info
     });
 
-    // Tìm khuôn mặt khớp nhất
+    // Find the best matching face
     const bestMatch = this.findBestMatch(newEmbedding, allRegisteredFaces);
 
     let logEntry;
 
-    const RECOGNITION_THRESHOLD = 0.6; 
+    const RECOGNITION_THRESHOLD = 0.6;
 
     if (bestMatch && bestMatch.distance < RECOGNITION_THRESHOLD) {
-      // Nếu nhận diện thành công
+      // If recognized successfully
       const matchedMember = bestMatch.face.member;
       console.log(`Recognized: ${matchedMember.name}`);
 
@@ -96,10 +99,9 @@ export class RecognitionController {
         action: 'granted',
         snapshot_url: file.path,
       });
-      
-      // 4a. Gửi lệnh mở cửa
-      this.appGateway.sendCommandToDevice({ command: 'OPEN_DOOR' });
 
+      // 4a. Send command to open the door
+      this.appGateway.sendCommandToDevice({ command: 'OPEN_DOOR' });
     } else {
       // Nếu không nhận ra
       console.log('Unrecognized face');
@@ -110,14 +112,14 @@ export class RecognitionController {
         snapshot_url: file.path,
       });
     }
-    
-    // 5. Lưu vào AccessLogs
+
+    // 5. Save to AccessLogs
     const savedLog = await this.accessLogRepository.save(logEntry);
 
-    // 4b. Gửi kết quả log cho React UI
+    // 4b. Send log result to React UI
     this.appGateway.notifyUi(savedLog);
 
-    // 6. Trả lời HTTP về cho ESP32-CAM
+    // 6. Respond to HTTP request from ESP32-CAM
     return {
       message: 'Recognition process complete',
       result: savedLog,
@@ -125,14 +127,14 @@ export class RecognitionController {
   }
 
   /**
-   * Gọi đến AI Service Python
+   * Call Python AI Service
    */
   private async realAiServiceCall(filePath: string): Promise<any> {
     const formData = new FormData();
     formData.append('file', fs.createReadStream(filePath));
 
-    // Gọi đến Python server (đang chạy ở port 5000)
-    const url = 'http://127.0.0.1:5000/recognize';
+    // Call Python server (running on port 5000)
+    const url = `${AI_SERVICE_URL}/recognize`;
 
     try {
       const { data } = await firstValueFrom(
@@ -142,20 +144,17 @@ export class RecognitionController {
           },
         }),
       );
-      return data; // Trả về { success: true, embedding: [...] }
-
+      return data; // Return { success: true, embedding: [...] }
     } catch (error) {
       if (error.response) {
-        // Lỗi từ server AI (ví dụ: 400 No face detected)
         return { success: false, detail: error.response.data.detail };
       }
-      // Lỗi kết nối
-      throw new Error(`Không thể kết nối đến AI Service: ${error.message}`);
+      throw new Error(`Cannot connect to AI Service: ${error.message}`);
     }
   }
 
   /**
-   * Tính khoảng cách L2 (Euclidean) giữa 2 vector embedding
+   * Calculate L2 (Euclidean) distance between 2 embedding vectors
    */
   private calculateL2Distance(emb1: number[], emb2: number[]): number {
     let sum = 0;
@@ -166,15 +165,17 @@ export class RecognitionController {
   }
 
   /**
-   * So sánh embedding mới với tất cả embedding trong DB
+   * Compare new embedding with all embeddings in DB
    */
-  private findBestMatch(newEmbedding: number[], dbFaces: FaceData[]): { face: FaceData, distance: number } | null {
-    let bestMatch: { face: FaceData, distance: number } | null = null;
+  private findBestMatch(
+    newEmbedding: number[],
+    dbFaces: FaceData[],
+  ): { face: FaceData; distance: number } | null {
+    let bestMatch: { face: FaceData; distance: number } | null = null;
     let minDistance = Infinity;
 
     for (const face of dbFaces) {
-      
-      const dbEmbedding = JSON.parse(face.face_encoding.toString()); 
+      const dbEmbedding = JSON.parse(face.face_encoding.toString());
 
       const distance = this.calculateL2Distance(newEmbedding, dbEmbedding);
 
@@ -183,7 +184,7 @@ export class RecognitionController {
         bestMatch = { face, distance };
       }
     }
-    
+
     console.log(`Best match distance: ${minDistance}`);
     return bestMatch;
   }

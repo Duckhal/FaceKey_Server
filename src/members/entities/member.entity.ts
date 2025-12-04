@@ -1,4 +1,13 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, OneToMany } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  OneToMany,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { User } from '../../users/entities/user.entity';
 import { FaceData } from '../../facedata/entities/facedata.entity';
 import { AccessLog } from '../../accesslogs/entities/accesslog.entity';
 
@@ -23,5 +32,11 @@ export class Member {
 
   @OneToMany(() => AccessLog, (log) => log.member)
   accessLogs: AccessLog[];
-}
 
+  @Column({ nullable: false })
+  user_id: number;
+
+  @ManyToOne(() => User, (user) => user.members)
+  @JoinColumn({ name: 'user_id' }) // Tên cột trong DB
+  user: User;
+}

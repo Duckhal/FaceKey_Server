@@ -3,18 +3,22 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccessLog } from './entities/accesslog.entity';
 import * as fs from 'fs';
+import { API_URL } from 'ip_config';
 
 @Injectable()
 export class AccesslogsService {
-  private readonly baseUrl = 'http://192.168.7.16:3000';
+  private readonly baseUrl = `${API_URL}`;
 
   constructor(
     @InjectRepository(AccessLog)
     private readonly accessLogRepository: Repository<AccessLog>,
   ) {}
 
-  async findAll() {
+  async findAll(userId: number) {
     const logs = await this.accessLogRepository.find({
+      where: {
+        user: { user_id: userId },
+      },
       order: { timestamp: 'DESC' },
       relations: ['member'],
     });
@@ -27,9 +31,11 @@ export class AccesslogsService {
     }));
   }
 
-  async clearAll() {
+  async clearAll(userId: number) {
     try {
-      const logs = await this.accessLogRepository.find();
+      const logs = await this.accessLogRepository.find({
+        where: { user: { user_id: userId } },
+      });
 
       logs.forEach((log) => {
         if (log.snapshot_url) {
@@ -47,9 +53,14 @@ export class AccesslogsService {
         }
       });
 
-      await this.accessLogRepository.createQueryBuilder().delete().execute();
+      await this.accessLogRepository
+        .createQueryBuilder()
+        .delete()
+        .from(AccessLog)
+        .where('user_id = :id', { id: userId })
+        .execute();
 
-      return { message: 'Đã xóa toàn bộ lịch sử và ảnh.' };
+      return { message: 'Đã xóa toàn bộ lịch sử và ảnh của bạn.' };
     } catch (error) {
       console.error('!!! LỖI NGHIÊM TRỌNG KHI XÓA LOGS !!!', error);
       throw new InternalServerErrorException('Lỗi khi xóa logs');

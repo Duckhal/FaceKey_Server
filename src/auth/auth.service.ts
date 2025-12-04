@@ -1,4 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -15,18 +19,15 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  // Hàm đăng ký
   async register(registerDto: RegisterDto) {
     const { username, email, password } = registerDto;
 
-    // Kiểm tra trùng email
     const existing = await this.usersRepo.findOne({ where: { email } });
     if (existing) {
       throw new BadRequestException('Email has already been registered');
     }
-
-    // Mã hoá mật khẩu
     const hashed = await bcrypt.hash(password, 10);
+
     const user = this.usersRepo.create({
       username,
       email,
@@ -34,23 +35,33 @@ export class AuthService {
     });
 
     await this.usersRepo.save(user);
-    return user;
+
+    const { password: _, ...result } = user;
+    return result;
   }
 
-  // Hàm đăng nhập
   async login(loginDto: LoginDto) {
     const { email, password } = loginDto;
-
     const user = await this.usersRepo.findOne({ where: { email } });
-    if (!user) return null;
+
+    if (!user) {
+      throw new UnauthorizedException('Email is not registered');
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return null;
-
-    // Tạo token JWT
+    if (!isMatch) {
+      throw new UnauthorizedException('Incorrect password');
+    }
     const payload = { sub: user.user_id, email: user.email };
     const token = await this.jwtService.signAsync(payload, { expiresIn: '7d' });
 
-    return token;
+    return {
+      access_token: token,
+      user: {
+        id: user.user_id,
+        email: user.email,
+        username: user.username,
+      },
+    };
   }
 }

@@ -1,12 +1,23 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  CreateDateColumn,
+  JoinColumn,
+} from 'typeorm';
 import { Member } from '../../members/entities/member.entity';
+import { User } from 'src/users/entities/user.entity';
 
 @Entity('accesslogs')
 export class AccessLog {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Member, (member) => member.accessLogs, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => Member, (member) => member.accessLogs, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   member: Member;
 
   @Column({ nullable: true })
@@ -23,5 +34,8 @@ export class AccessLog {
 
   @CreateDateColumn()
   timestamp: Date;
-}
 
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+}

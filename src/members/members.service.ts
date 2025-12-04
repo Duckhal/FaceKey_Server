@@ -6,12 +6,13 @@ import { FaceData } from '../facedata/entities/facedata.entity';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import * as fs from 'fs';
+import { API_URL, AI_SERVICE_URL } from 'ip_config';
 
 import FormData = require('form-data');
 
 @Injectable()
 export class MembersService {
-  private readonly baseUrl = 'http://192.168.7.16:3000';
+  private readonly baseUrl = `${API_URL}`;
 
   constructor(
     @InjectRepository(Member)
@@ -21,21 +22,19 @@ export class MembersService {
     private readonly httpService: HttpService,
   ) {}
 
-  /**
-   * API 1: Đăng ký khuôn mặt
-   */
   async registerFace(
     body: { name: string; role: string },
     file: Express.Multer.File,
+    userId: number,
   ) {
     if (!file) {
-      throw new NotFoundException('Không có file ảnh nào được upload.');
+      throw new NotFoundException('No image file uploaded.');
     }
 
-    // 1. Gọi AI Service
+    // 1. Call AI Service
     const formData = new FormData();
     formData.append('file', fs.createReadStream(file.path));
-    const url = 'http://127.0.0.1:5000/recognize';
+    const url = `${AI_SERVICE_URL}/recognize`;
     let embedding: number[];
 
     try {
@@ -45,22 +44,22 @@ export class MembersService {
         }),
       );
       if (!data.success) {
-        throw new Error(data.detail || 'AI Service không thể xử lý ảnh.');
+        throw new Error(data.detail || 'AI Service cannot process the image.');
       }
       embedding = data.embedding;
     } catch (error) {
       fs.unlinkSync(file.path);
-      throw new Error(`Lỗi từ AI Service: ${error.message}`);
+      throw new Error(`Error from AI Service: ${error.message}`);
     }
 
-    // 2. Lưu vào Database
     const newMember = this.memberRepository.create({
       name: body.name,
       role: body.role || 'Member',
+      user: { user_id: userId },
     });
     const savedMember = await this.memberRepository.save(newMember);
 
-    // 3. Tạo FaceData
+    // 2. Create FaceData
     const newFaceData = this.faceDataRepository.create({
       member: savedMember,
       face_encoding: Buffer.from(JSON.stringify(embedding)),
@@ -71,11 +70,9 @@ export class MembersService {
     return savedMember;
   }
 
-  /**
-   * API: Lấy tất cả member (kèm avatar)
-   */
-  async findAll(): Promise<any[]> {
+  async findAll(userId: number): Promise<any[]> {
     const members = await this.memberRepository.find({
+      where: { user: { user_id: userId } },
       relations: {
         faceData: true,
       },
@@ -98,19 +95,19 @@ export class MembersService {
     });
   }
 
-  /**
-   * API: Lấy 1 member (kèm avatar)
-   */
-  async findOne(id: number): Promise<any> {
+  async findOne(id: number, userId: number): Promise<any> {
     const member = await this.memberRepository.findOne({
-      where: { member_id: id },
+      where: {
+        member_id: id,
+        user: { user_id: userId },
+      },
       relations: {
         faceData: true,
       },
     });
 
     if (!member) {
-      throw new NotFoundException(`Không tìm thấy thành viên với ID #${id}`);
+      throw new NotFoundException(`Member with ID #${id} not found`);
     }
 
     const imageUrl =
@@ -128,33 +125,30 @@ export class MembersService {
     };
   }
 
-  /**
-   * API: Cập nhật member (Hàm 3 tham số)
-   */
   async update(
     id: number,
     body: { name: string; role: string },
     file: Express.Multer.File,
+    userId: number,
   ): Promise<Member> {
     const member = await this.memberRepository.findOne({
-      where: { member_id: id },
+      where: { member_id: id, user: { user_id: userId } },
     });
+
     if (!member) {
-      throw new NotFoundException(`Không tìm thấy thành viên với ID #${id}`);
+      throw new NotFoundException(`Member with ID #${id} not found`);
     }
 
-    // 1. Cập nhật thông tin (name/role)
     member.name = body.name;
     member.role = body.role;
     await this.memberRepository.save(member);
 
-    // 2. Nếu có file ảnh mới, cập nhật FaceData
     if (file) {
-      console.log('Đang cập nhật ảnh đại diện...');
+      console.log('Updating avatar image...');
 
       const formData = new FormData();
       formData.append('file', fs.createReadStream(file.path));
-      const url = 'http://127.0.0.1:5000/recognize';
+      const url = `${AI_SERVICE_URL}/recognize`;
       let embedding: number[];
       try {
         const { data } = await firstValueFrom(
@@ -166,7 +160,7 @@ export class MembersService {
         embedding = data.embedding;
       } catch (error) {
         fs.unlinkSync(file.path);
-        throw new Error(`Lỗi từ AI Service: ${error.message}`);
+        throw new Error(`Error from AI Service: ${error.message}`);
       }
 
       await this.faceDataRepository.delete({ member: { member_id: id } });
@@ -182,40 +176,33 @@ export class MembersService {
     return member;
   }
 
-  /**
-   * API: Xóa member
-   */
-  async remove(id: number): Promise<void> {
-    // 1. Tìm member VÀ các faceData liên quan
+  async remove(id: number, userId: number): Promise<void> {
     const member = await this.memberRepository.findOne({
-      where: { member_id: id },
+      where: { member_id: id, user: { user_id: userId } },
       relations: {
         faceData: true,
       },
     });
 
-    // 2. Kiểm tra
     if (!member) {
-      throw new NotFoundException(`Không tìm thấy thành viên với ID #${id}`);
+      throw new NotFoundException(`Member with ID #${id} not found`);
     }
 
-    // 3. Lấy đường dẫn ảnh
     const imageUrl =
       member.faceData && member.faceData.length > 0
         ? member.faceData[0].image_url
         : null;
 
-    // 4. Xóa member khỏi DB
-    // (Dùng .remove(entity) sẽ kích hoạt cascade delete cho FaceData, AccessLog)
     await this.memberRepository.remove(member);
 
-    // 5. Xóa file ảnh trên server
     if (imageUrl) {
       try {
-        fs.unlinkSync(imageUrl);
-        console.log(`Đã xóa file ảnh: ${imageUrl}`);
+        if (fs.existsSync(imageUrl)) {
+          fs.unlinkSync(imageUrl);
+          console.log(`Deleted image file: ${imageUrl}`);
+        }
       } catch (err) {
-        console.error(`Lỗi khi xóa file ${imageUrl}:`, err);
+        console.error(`Error deleting file ${imageUrl}:`, err);
       }
     }
   }

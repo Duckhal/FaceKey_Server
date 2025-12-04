@@ -1,4 +1,11 @@
-import { Controller, Post, Body, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  HttpException,
+  HttpStatus,
+  BadRequestException,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -20,15 +27,18 @@ export class AuthController {
         },
       };
     } catch (error) {
-      throw new BadRequestException(error.message);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
     }
   }
 
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
     try {
-      const token = await this.authService.login(loginDto);
-      return { accessToken: token };
+      const result = await this.authService.login(loginDto);
+      return result;
     } catch (error) {
       throw new BadRequestException(error.message);
     }
