@@ -17,7 +17,7 @@ export class FaceData {
   @Column({ nullable: true })
   user_id: number;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' }) // Xóa User thì xóa luôn Log
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 

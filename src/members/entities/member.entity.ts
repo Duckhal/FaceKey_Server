@@ -37,6 +37,6 @@ export class Member {
   user_id: number;
 
   @ManyToOne(() => User, (user) => user.members)
-  @JoinColumn({ name: 'user_id' }) // Tên cột trong DB
+  @JoinColumn({ name: 'user_id' }) // Column name in DB
   user: User;
 }

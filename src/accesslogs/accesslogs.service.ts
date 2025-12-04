@@ -42,11 +42,11 @@ export class AccesslogsService {
           try {
             if (fs.existsSync(log.snapshot_url)) {
               fs.unlinkSync(log.snapshot_url);
-              console.log(`Đã xóa file: ${log.snapshot_url}`);
+              console.log(`File: ${log.snapshot_url} deleted successfully.`);
             }
           } catch (err) {
             console.error(
-              `Không xóa được file ${log.snapshot_url}:`,
+              `Failed to delete file ${log.snapshot_url}:`,
               err.message,
             );
           }
@@ -60,10 +60,10 @@ export class AccesslogsService {
         .where('user_id = :id', { id: userId })
         .execute();
 
-      return { message: 'Đã xóa toàn bộ lịch sử và ảnh của bạn.' };
+      return { message: 'All your history and images have been deleted.' };
     } catch (error) {
-      console.error('!!! LỖI NGHIÊM TRỌNG KHI XÓA LOGS !!!', error);
-      throw new InternalServerErrorException('Lỗi khi xóa logs');
+      console.error('!!! CRITICAL ERROR WHEN DELETING LOGS !!!', error);
+      throw new InternalServerErrorException('Error deleting logs');
     }
   }
 }
