@@ -17,6 +17,8 @@ import { AppGateway } from './app.gateway';
 import { RecognitionController } from './recognition.controller';
 import { HttpModule } from '@nestjs/axios';
 import { ServeStaticModule } from '@nestjs/serve-static';
+import { DevicesModule } from './devices/devices.module';
+import { Device } from './devices/entities/device.entity';
 
 @Module({
   imports: [
@@ -42,7 +44,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      entities: [User, Member, FaceData, AccessLog],
+      entities: [User, Member, FaceData, AccessLog, Device],
       synchronize: true,
     }),
 
@@ -57,7 +59,8 @@ import { ServeStaticModule } from '@nestjs/serve-static';
       rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
     }),
-    TypeOrmModule.forFeature([FaceData, AccessLog]),
+    TypeOrmModule.forFeature([FaceData, AccessLog, Device]),
+    DevicesModule,
   ],
 
   controllers: [

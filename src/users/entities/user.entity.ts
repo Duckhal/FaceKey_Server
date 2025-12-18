@@ -1,5 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
 import { Member } from '../../members/entities/member.entity';
+import { Device } from 'src/devices/entities/device.entity';
 
 @Entity('users')
 export class User {
@@ -17,6 +18,9 @@ export class User {
 
   @OneToMany(() => Member, (member) => member.user)
   members: Member[];
+
+  @OneToMany(() => Device, (device) => device.user)
+  devices: Device[];
 
   @Column({ type: 'varchar', nullable: true })
   reset_otp: string | null;

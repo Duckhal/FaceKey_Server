@@ -4,6 +4,8 @@ import {
   UseInterceptors,
   UploadedFile,
   Inject,
+  Headers, // <--- 1. Import Headers
+  UnauthorizedException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -15,12 +17,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FaceData } from './facedata/entities/facedata.entity';
 import { AccessLog } from './accesslogs/entities/accesslog.entity';
+import { Device } from './devices/entities/device.entity'; // <--- 2. Import Device Entity
 import { AI_SERVICE_URL } from 'ip_config';
 
 import FormData = require('form-data');
 import * as fs from 'fs';
+import { time } from 'console';
 
-@Controller('api')
+@Controller('device')
 export class RecognitionController {
   constructor(
     private readonly appGateway: AppGateway,
@@ -29,12 +33,13 @@ export class RecognitionController {
     private faceDataRepository: Repository<FaceData>,
     @InjectRepository(AccessLog)
     private accessLogRepository: Repository<AccessLog>,
+    @InjectRepository(Device) // <--- 3. Inject Device Repository
+    private deviceRepository: Repository<Device>,
   ) {}
 
   @Post('recognize')
   @UseInterceptors(
     FileInterceptor('file', {
-      // 1. Save snapshot image (to 'uploads/logs' directory)
       storage: diskStorage({
         destination: './uploads/logs',
         filename: (req, file, cb) => {
@@ -50,9 +55,32 @@ export class RecognitionController {
       }),
     }),
   )
-  async handleRecognition(@UploadedFile() file: Express.Multer.File) {
-    console.log('Snapshot image received:', file.filename);
+  async handleRecognition(
+    @UploadedFile() file: Express.Multer.File,
+    @Headers('x-device-uid') deviceUid: string, // <--- 4. Nhận MAC Address từ ESP32
+  ) {
+    console.log(`Snapshot received from Device: ${deviceUid}`);
 
+    // === BƯỚC 1: XÁC THỰC THIẾT BỊ ===
+    if (!deviceUid) {
+      this.cleanupFile(file.path);
+      return { message: 'Missing x-device-uid header' };
+    }
+
+    const device = await this.deviceRepository.findOne({
+      where: { device_uid: deviceUid },
+      relations: ['user'], // Lấy thông tin chủ sở hữu (User)
+    });
+
+    if (!device) {
+      this.cleanupFile(file.path);
+      console.log(`Device ${deviceUid} not registered.`);
+      return { message: 'Device not registered' };
+    }
+
+    const owner = device.user; // Đây là Admin/Chủ nhà của thiết bị này
+
+    // === BƯỚC 2: GỌI AI SERVICE ===
     let aiResponse;
     try {
       aiResponse = await this.realAiServiceCall(file.path);
@@ -62,89 +90,88 @@ export class RecognitionController {
     }
 
     if (!aiResponse.success) {
-      console.log('AI Service reported error:', aiResponse.detail);
-      try {
-        fs.unlinkSync(file.path);
-        console.log(`Automatically deleted junk image: ${file.filename}`);
-      } catch (err) {
-        console.log(`Error deleting file ${file.path}:`, err);
-      }
-      this.appGateway.notifyUi({ message: 'Face not recognized' });
-      return { message: 'Face not recognized' };
+      this.cleanupFile(file.path); // Xóa ảnh rác nếu AI không nhận diện được mặt người
+
+      // Gửi thông báo cho RIÊNG User này
+      this.appGateway.notifyUi(owner.user_id, { message: 'Face not detected' });
+      return { message: 'Face not detected' };
     }
 
     const newEmbedding: number[] = aiResponse.embedding;
 
-    // 3. Process AI results
-    // Get all registered faces from DB
-    const allRegisteredFaces = await this.faceDataRepository.find({
-      relations: ['member'], // Also get 'member' info
+    // === BƯỚC 3: LỌC DỮ LIỆU KHUÔN MẶT (MULTI-TENANT) ===
+    // Chỉ lấy khuôn mặt của Member thuộc User này
+    const registeredFaces = await this.faceDataRepository.find({
+      where: {
+        member: { user: { user_id: owner.user_id } },
+      },
+      relations: ['member'],
     });
 
-    // Find the best matching face
-    const bestMatch = this.findBestMatch(newEmbedding, allRegisteredFaces);
+    // === BƯỚC 4: SO SÁNH ===
+    const bestMatch = this.findBestMatch(newEmbedding, registeredFaces);
 
     let logEntry;
-
-    const RECOGNITION_THRESHOLD = 0.6;
+    const RECOGNITION_THRESHOLD = 0.5; // (Lưu ý: 0.6 đôi khi hơi lỏng, 0.5 chặt hơn)
 
     if (bestMatch && bestMatch.distance < RECOGNITION_THRESHOLD) {
-      // If recognized successfully
+      // --> NHẬN DIỆN THÀNH CÔNG
       const matchedMember = bestMatch.face.member;
-      console.log(`Recognized: ${matchedMember.name}`);
+      console.log(`Recognized: ${matchedMember.name} (Owner: ${owner.email})`);
 
       logEntry = this.accessLogRepository.create({
         member: matchedMember,
         member_name_snapshot: matchedMember.name,
         action: 'granted',
         snapshot_url: file.path,
+        user: owner, // <--- Gắn Log vào User
+        // device: device, // <--- (Optional) Gắn Log vào Device nếu Entity AccessLog đã có quan hệ này
       });
 
-      // 4a. Send command to open the door
-      this.appGateway.sendCommandToDevice({ command: 'OPEN_DOOR' });
+      // Mở cửa (Gửi lệnh kèm userId để Gateway biết gửi cho ai/thiết bị nào)
+      this.appGateway.sendCommandToDevice(owner.user_id, {
+        command: 'OPEN_DOOR',
+        from_device: device.device_uid,
+        timestamp: new Date().toISOString(),
+      });
     } else {
-      // Nếu không nhận ra
+      // --> KHÔNG NHẬN RA (NGƯỜI LẠ)
       console.log('Unrecognized face');
       logEntry = this.accessLogRepository.create({
-        //member: null,
         member_name_snapshot: 'Unknown',
         action: 'denied_unrecognized',
         snapshot_url: file.path,
+        user: owner, // <--- Vẫn phải gắn Log vào User để họ biết có người lạ
+        // device: device,
       });
     }
 
-    // 5. Save to AccessLogs
+    // === BƯỚC 5: LƯU VÀ THÔNG BÁO ===
     const savedLog = await this.accessLogRepository.save(logEntry);
 
-    // 4b. Send log result to React UI
-    this.appGateway.notifyUi(savedLog);
+    // Chỉ gửi thông báo UI cho User sở hữu thiết bị này
+    this.appGateway.notifyUi(owner.user_id, savedLog);
 
-    // 6. Respond to HTTP request from ESP32-CAM
     return {
       message: 'Recognition process complete',
       result: savedLog,
     };
   }
 
-  /**
-   * Call Python AI Service
-   */
+  // --- CÁC HÀM PHỤ TRỢ ---
+
   private async realAiServiceCall(filePath: string): Promise<any> {
     const formData = new FormData();
     formData.append('file', fs.createReadStream(filePath));
-
-    // Call Python server (running on port 5000)
     const url = `${AI_SERVICE_URL}/recognize`;
 
     try {
       const { data } = await firstValueFrom(
         this.httpService.post(url, formData, {
-          headers: {
-            ...formData.getHeaders(),
-          },
+          headers: { ...formData.getHeaders() },
         }),
       );
-      return data; // Return { success: true, embedding: [...] }
+      return data;
     } catch (error) {
       if (error.response) {
         return { success: false, detail: error.response.data.detail };
@@ -153,9 +180,6 @@ export class RecognitionController {
     }
   }
 
-  /**
-   * Calculate L2 (Euclidean) distance between 2 embedding vectors
-   */
   private calculateL2Distance(emb1: number[], emb2: number[]): number {
     let sum = 0;
     for (let i = 0; i < emb1.length; i++) {
@@ -164,9 +188,6 @@ export class RecognitionController {
     return Math.sqrt(sum);
   }
 
-  /**
-   * Compare new embedding with all embeddings in DB
-   */
   private findBestMatch(
     newEmbedding: number[],
     dbFaces: FaceData[],
@@ -176,7 +197,6 @@ export class RecognitionController {
 
     for (const face of dbFaces) {
       const dbEmbedding = JSON.parse(face.face_encoding.toString());
-
       const distance = this.calculateL2Distance(newEmbedding, dbEmbedding);
 
       if (distance < minDistance) {
@@ -184,8 +204,16 @@ export class RecognitionController {
         bestMatch = { face, distance };
       }
     }
-
     console.log(`Best match distance: ${minDistance}`);
     return bestMatch;
+  }
+
+  // Hàm dọn dẹp file ảnh rác
+  private cleanupFile(path: string) {
+    try {
+      if (fs.existsSync(path)) fs.unlinkSync(path);
+    } catch (e) {
+      console.error('Cleanup error', e);
+    }
   }
 }
