@@ -8,29 +8,38 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import * as mqtt from 'mqtt';
 
 @WebSocketGateway({
-  cors: {
-    origin: '*',
-  },
+  cors: { origin: '*' },
+  transports: ['websocket'],
 })
 export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  handleConnection(client: Socket, ...args: any[]) {
-    console.log(`Client connected: ${client.id}`);
+  private mqttClient: mqtt.MqttClient;
+
+  constructor() {
+    this.mqttClient = mqtt.connect('mqtt://broker.hivemq.com:1883');
+
+    this.mqttClient.on('connect', () => {
+      console.log('NestJS Connected to Local MQTT Broker');
+    });
+
+    this.mqttClient.on('error', (err) => {
+      console.error('MQTT Error:', err);
+    });
+  }
+
+  handleConnection(client: Socket) {
+    console.log(`App Client connected: ${client.id}`);
   }
 
   handleDisconnect(client: Socket) {
-    console.log(`Client disconnected: ${client.id}`);
+    console.log(`App Client disconnected: ${client.id}`);
   }
 
-  /**
-   * === 1. THÊM HÀM NÀY ===
-   * Cho phép App/Device tham gia vào "phòng riêng" của User
-   * Client sẽ gửi event 'join_room' kèm userId
-   */
   @SubscribeMessage('join_room')
   handleJoinRoom(
     @ConnectedSocket() client: Socket,
@@ -38,43 +47,25 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     const roomName = `user_${userId}`;
     client.join(roomName);
-    console.log(`Client ${client.id} joined room: ${roomName}`);
+    console.log(`App joined room: ${roomName}`);
   }
 
-  /**
-   * Gửi kết quả nhận diện cho React UI
-   * === 2. SỬA THAM SỐ: Thêm userId ===
-   */
+  // Gửi lệnh xuống ESP32 qua MQTT
+  sendCommandToDevice(userId: number, payload: any) {
+    const targetDeviceUid = payload.from_device;
+    const topic = `device/${targetDeviceUid}/command`;
+    const message = payload.command;
+
+    console.log(`📡 MQTT Publish to [${topic}]: ${message}`);
+    this.mqttClient.publish(topic, message);
+  }
+
   notifyUi(userId: number, result: any) {
-    if (!userId) {
-      console.warn(
-        'notifyUi called without userId, broadcasting to all (fallback)',
-      );
-      this.server.emit('recognition_result', result);
-      return;
-    }
-
     const roomName = `user_${userId}`;
-    console.log(`Notifying UI in room ${roomName}...`);
-
-    // Chỉ gửi cho các client trong phòng user_1, user_2...
-    this.server.to(roomName).emit('recognition_result', result);
-  }
-
-  /**
-   * Gửi lệnh mở cửa cho ESP32-Receiver
-   * === 3. SỬA THAM SỐ: Thêm userId ===
-   */
-  sendCommandToDevice(userId: number, command: any) {
-    if (!userId) {
-      this.server.emit('device_command', command);
-      return;
+    if (this.server) {
+      this.server.to(roomName).emit('recognition_result', result);
+    } else {
+      console.error('Socket Server is not initialized!');
     }
-
-    const roomName = `user_${userId}`;
-    console.log(`Sending command to device in room ${roomName}...`);
-
-    // Chỉ gửi lệnh cho thiết bị thuộc về user này
-    this.server.to(roomName).emit('device_command', command);
   }
 }

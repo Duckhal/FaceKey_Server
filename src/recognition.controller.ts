@@ -1,30 +1,36 @@
 import {
   Controller,
   Post,
+  Body,
   UseInterceptors,
   UploadedFile,
-  Inject,
-  Headers, // <--- 1. Import Headers
-  UnauthorizedException,
+  Headers,
+  UseGuards,
+  Request,
+  ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
-import { AppGateway } from './app.gateway';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { FaceData } from './facedata/entities/facedata.entity';
-import { AccessLog } from './accesslogs/entities/accesslog.entity';
-import { Device } from './devices/entities/device.entity'; // <--- 2. Import Device Entity
-import { AI_SERVICE_URL } from 'ip_config';
-
-import FormData = require('form-data');
 import * as fs from 'fs';
-import { time } from 'console';
+import FormData = require('form-data');
 
-@Controller('device')
+import { AppGateway } from './app.gateway';
+import { FaceData } from './facedata/entities/facedata.entity';
+import {
+  AccessLog,
+  AccessAction,
+} from './accesslogs/entities/accesslog.entity';
+import { Device, DeviceType } from './devices/entities/device.entity';
+import { AI_SERVICE_URL } from 'ip_config';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+
+@Controller('recognition')
 export class RecognitionController {
   constructor(
     private readonly appGateway: AppGateway,
@@ -33,10 +39,53 @@ export class RecognitionController {
     private faceDataRepository: Repository<FaceData>,
     @InjectRepository(AccessLog)
     private accessLogRepository: Repository<AccessLog>,
-    @InjectRepository(Device) // <--- 3. Inject Device Repository
+    @InjectRepository(Device)
     private deviceRepository: Repository<Device>,
   ) {}
 
+  // Mở cửa từ xa qua app
+  @UseGuards(JwtAuthGuard)
+  @Post('open')
+  async remoteOpen(@Body('device_uid') deviceUid: string, @Request() req) {
+    const userId = req.user.userId;
+
+    const device = await this.deviceRepository.findOne({
+      where: {
+        device_uid: deviceUid,
+        user: { user_id: userId },
+      },
+    });
+
+    if (!device) {
+      throw new ForbiddenException('Device not found or access denied.');
+    }
+
+    // KIỂM TRA device_type - CHỈ CHO PHÉP LOCK
+    if (device.device_type !== DeviceType.LOCK) {
+      throw new BadRequestException(
+        'This device is not a LOCK type. Cannot open door.',
+      );
+    }
+
+    this.appGateway.sendCommandToDevice(userId, {
+      command: 'OPEN_DOOR',
+      from_device: deviceUid,
+      timestamp: new Date().toISOString(),
+    });
+
+    // 2. SỬA DÙNG ENUM
+    const logEntry = this.accessLogRepository.create({
+      member_name_snapshot: 'Remote App Control',
+      action: AccessAction.GRANTED_REMOTE,
+      snapshot_url: undefined,
+      user: { user_id: userId },
+    });
+    await this.accessLogRepository.save(logEntry);
+
+    return { message: 'Open command sent', success: true };
+  }
+
+  // Nhận diện khuôn mặt
   @Post('recognize')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -57,11 +106,8 @@ export class RecognitionController {
   )
   async handleRecognition(
     @UploadedFile() file: Express.Multer.File,
-    @Headers('x-device-uid') deviceUid: string, // <--- 4. Nhận MAC Address từ ESP32
+    @Headers('x-device-uid') deviceUid: string,
   ) {
-    console.log(`Snapshot received from Device: ${deviceUid}`);
-
-    // === BƯỚC 1: XÁC THỰC THIẾT BỊ ===
     if (!deviceUid) {
       this.cleanupFile(file.path);
       return { message: 'Missing x-device-uid header' };
@@ -69,97 +115,82 @@ export class RecognitionController {
 
     const device = await this.deviceRepository.findOne({
       where: { device_uid: deviceUid },
-      relations: ['user'], // Lấy thông tin chủ sở hữu (User)
+      relations: ['user'],
     });
 
     if (!device) {
       this.cleanupFile(file.path);
-      console.log(`Device ${deviceUid} not registered.`);
       return { message: 'Device not registered' };
     }
 
-    const owner = device.user; // Đây là Admin/Chủ nhà của thiết bị này
+    const owner = device.user;
 
-    // === BƯỚC 2: GỌI AI SERVICE ===
     let aiResponse;
     try {
       aiResponse = await this.realAiServiceCall(file.path);
     } catch (error) {
-      console.error('Error calling AI Service:', error.message);
+      console.error('AI Service Error:', error.message);
       return { message: 'Error calling AI Service' };
     }
 
     if (!aiResponse.success) {
-      this.cleanupFile(file.path); // Xóa ảnh rác nếu AI không nhận diện được mặt người
-
-      // Gửi thông báo cho RIÊNG User này
+      this.cleanupFile(file.path);
       this.appGateway.notifyUi(owner.user_id, { message: 'Face not detected' });
       return { message: 'Face not detected' };
     }
 
-    const newEmbedding: number[] = aiResponse.embedding;
-
-    // === BƯỚC 3: LỌC DỮ LIỆU KHUÔN MẶT (MULTI-TENANT) ===
-    // Chỉ lấy khuôn mặt của Member thuộc User này
     const registeredFaces = await this.faceDataRepository.find({
-      where: {
-        member: { user: { user_id: owner.user_id } },
-      },
+      where: { member: { user: { user_id: owner.user_id } } },
       relations: ['member'],
     });
 
-    // === BƯỚC 4: SO SÁNH ===
-    const bestMatch = this.findBestMatch(newEmbedding, registeredFaces);
-
+    const bestMatch = this.findBestMatch(aiResponse.embedding, registeredFaces);
+    const RECOGNITION_THRESHOLD = 0.8;
     let logEntry;
-    const RECOGNITION_THRESHOLD = 0.5; // (Lưu ý: 0.6 đôi khi hơi lỏng, 0.5 chặt hơn)
 
     if (bestMatch && bestMatch.distance < RECOGNITION_THRESHOLD) {
-      // --> NHẬN DIỆN THÀNH CÔNG
       const matchedMember = bestMatch.face.member;
-      console.log(`Recognized: ${matchedMember.name} (Owner: ${owner.email})`);
+
+      const lockDevice = await this.deviceRepository.findOne({
+        where: {
+          user: { user_id: owner.user_id },
+          device_type: DeviceType.LOCK,
+        },
+      });
+
+      if (lockDevice) {
+        this.appGateway.sendCommandToDevice(owner.user_id, {
+          command: 'OPEN_DOOR',
+          from_device: lockDevice.device_uid,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        console.warn(`No LOCK device found for user ${owner.user_id}`);
+      }
 
       logEntry = this.accessLogRepository.create({
         member: matchedMember,
         member_name_snapshot: matchedMember.name,
-        action: 'granted',
+        action: AccessAction.GRANTED,
         snapshot_url: file.path,
-        user: owner, // <--- Gắn Log vào User
-        // device: device, // <--- (Optional) Gắn Log vào Device nếu Entity AccessLog đã có quan hệ này
-      });
-
-      // Mở cửa (Gửi lệnh kèm userId để Gateway biết gửi cho ai/thiết bị nào)
-      this.appGateway.sendCommandToDevice(owner.user_id, {
-        command: 'OPEN_DOOR',
-        from_device: device.device_uid,
-        timestamp: new Date().toISOString(),
+        user: owner,
       });
     } else {
-      // --> KHÔNG NHẬN RA (NGƯỜI LẠ)
-      console.log('Unrecognized face');
       logEntry = this.accessLogRepository.create({
         member_name_snapshot: 'Unknown',
-        action: 'denied_unrecognized',
+        action: AccessAction.DENIED,
         snapshot_url: file.path,
-        user: owner, // <--- Vẫn phải gắn Log vào User để họ biết có người lạ
-        // device: device,
+        user: owner,
       });
     }
 
-    // === BƯỚC 5: LƯU VÀ THÔNG BÁO ===
     const savedLog = await this.accessLogRepository.save(logEntry);
-
-    // Chỉ gửi thông báo UI cho User sở hữu thiết bị này
     this.appGateway.notifyUi(owner.user_id, savedLog);
 
-    return {
-      message: 'Recognition process complete',
-      result: savedLog,
-    };
+    return { message: 'Process complete', result: savedLog };
   }
 
-  // --- CÁC HÀM PHỤ TRỢ ---
-
+  // Helper Functions
   private async realAiServiceCall(filePath: string): Promise<any> {
     const formData = new FormData();
     formData.append('file', fs.createReadStream(filePath));
@@ -173,10 +204,9 @@ export class RecognitionController {
       );
       return data;
     } catch (error) {
-      if (error.response) {
+      if (error.response)
         return { success: false, detail: error.response.data.detail };
-      }
-      throw new Error(`Cannot connect to AI Service: ${error.message}`);
+      throw new Error(`AI Service Connect Error: ${error.message}`);
     }
   }
 
@@ -204,11 +234,9 @@ export class RecognitionController {
         bestMatch = { face, distance };
       }
     }
-    console.log(`Best match distance: ${minDistance}`);
     return bestMatch;
   }
 
-  // Hàm dọn dẹp file ảnh rác
   private cleanupFile(path: string) {
     try {
       if (fs.existsSync(path)) fs.unlinkSync(path);

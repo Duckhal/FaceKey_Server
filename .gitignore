@@ -64,3 +64,5 @@ pids
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 ip_config.ts
+firmware/AI_Service/__pycache__/
+firmware/AI_Service/venv/

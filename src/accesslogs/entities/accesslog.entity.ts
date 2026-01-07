@@ -9,6 +9,12 @@ import {
 import { Member } from '../../members/entities/member.entity';
 import { User } from 'src/users/entities/user.entity';
 
+export enum AccessAction {
+  GRANTED = 'granted',
+  DENIED = 'denied_unrecognized',
+  GRANTED_REMOTE = 'granted_remote',
+}
+
 @Entity('accesslogs')
 export class AccessLog {
   @PrimaryGeneratedColumn()
@@ -18,6 +24,7 @@ export class AccessLog {
     nullable: true,
     onDelete: 'SET NULL',
   })
+  @JoinColumn({ name: 'member_id' })
   member: Member;
 
   @Column({ nullable: true })
@@ -25,9 +32,10 @@ export class AccessLog {
 
   @Column({
     type: 'enum',
-    enum: ['granted', 'denied_unrecognized'],
+    enum: AccessAction,
+    default: AccessAction.DENIED,
   })
-  action: 'granted' | 'denied_unrecognized';
+  action: AccessAction;
 
   @Column({ nullable: true })
   snapshot_url: string;
