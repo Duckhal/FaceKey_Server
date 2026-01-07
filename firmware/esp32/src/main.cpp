@@ -6,7 +6,6 @@
 const char *ssid = "Galaxy A53 5G 5CC2";
 const char *password = "oysl4029";
 
-// Dùng Broker Public để test cho nhanh
 const char *mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 
@@ -51,7 +50,7 @@ void callback(char *topic, byte *payload, unsigned int length)
   {
     Serial.println(">>> LỆNH: MỞ CỬA MQTT");
     myServo.write(90);
-    // Dùng millis để tránh delay chặn kết nối (nhưng với MQTT delay ít bị disconnect hơn SocketIO)
+    // Dùng millis để tránh delay chặn kết nối MQTT
     delay(2000);
     myServo.write(0);
     Serial.println(">>> Đã đóng cửa");
@@ -70,8 +69,6 @@ void reconnect()
     if (client.connect(clientId.c_str()))
     {
       Serial.println("connected");
-      // Sau khi kết nối, Subscribe vào topic riêng của thiết bị
-      // Topic ví dụ: device/MAC_ADDRESS/command
       client.subscribe(topic_command.c_str());
       Serial.print("Subscribed to: ");
       Serial.println(topic_command);
@@ -104,12 +101,10 @@ void setup()
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 
-  Serial.println("--------------------------------");
   Serial.print("DEVICE ID: ");
   Serial.println(device_uid);
   Serial.print("LISTENING ON TOPIC: ");
   Serial.println(topic_command);
-  Serial.println("--------------------------------");
 }
 
 void loop()

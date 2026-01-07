@@ -120,18 +120,14 @@ void sendPhoto()
   }
   Serial.println("Đã kết nối. Đang gửi request...");
 
-  // 4. Gửi HTTP Request Header (phần tiêu đề) thủ công
-  // Gửi dòng POST và các header
   client.print(String("POST ") + server_endpoint + " HTTP/1.1\r\n");
   client.print(String("Host: ") + server_ip + "\r\n");
   client.print(String("x-device-uid: ") + macAddr + "\r\n");
   client.print("Connection: close\r\n");
   client.print(String("Content-Length: ") + total_len + "\r\n");
   client.print(String("Content-Type: multipart/form-data; boundary=") + boundary + "\r\n");
-  client.print("\r\n"); // Dòng trống kết thúc header
+  client.print("\r\n");
 
-  // 5. Gửi Body (payload) theo 3 phần (đây là streaming)
-  // Phần 1: Gửi "body_start"
   client.print(body_start);
 
   // Phần 2: Gửi dữ liệu ảnh (fb->buf)
@@ -180,7 +176,7 @@ void sendPhoto()
   esp_camera_fb_return(fb);
 }
 
-// === HÀM SETUP CHÍNH ===
+// HÀM SETUP CHÍNH
 void setup()
 {
   Serial.begin(115200);
@@ -188,11 +184,9 @@ void setup()
   Serial.println("Khởi động ESP32-CAM (HTTP POST Client)...");
 
   setupWifi();
-  Serial.println("--------------------------------------");
   Serial.print("DEVICE MAC ADDRESS: ");
   Serial.println(WiFi.macAddress());
   Serial.println("Hãy dùng mã này để đăng ký trong App.");
-  Serial.println("--------------------------------------");
   setupCamera();
 
   Serial.println("Thực hiện 1 lần chụp nháp để 'làm nóng' camera...");
@@ -205,7 +199,7 @@ void setup()
   Serial.println("Thiết lập hoàn tất.");
 }
 
-// === HÀM LOOP CHÍNH ===
+// HÀM LOOP CHÍNH
 void loop()
 {
   Serial.println("Chờ 3 giây trước khi gửi ảnh tiếp theo...");
