@@ -1,4 +1,4 @@
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { DeviceType } from '../entities/device.entity';
 
 export class CreateDeviceDto {
@@ -13,4 +13,10 @@ export class CreateDeviceDto {
   @IsNotEmpty()
   @IsEnum(DeviceType)
   device_type: DeviceType; // 'CAM' or 'LOCK'
+
+  @IsOptional()
+  camera_uid?: string;
+
+  @IsOptional()
+  gpio_pin?: number;
 }

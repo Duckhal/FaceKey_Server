@@ -76,12 +76,19 @@ export class DevicesService {
    * Update device name
    */
   async update(id: number, updateDeviceDto: UpdateDeviceDto, userId: number) {
-    // Find device first to check if it belongs to this user
     const device = await this.findOne(id, userId);
 
-    // Update information (Only allow updating name, not MAC or Type to avoid system errors)
     if (updateDeviceDto.device_name) {
       device.device_name = updateDeviceDto.device_name;
+    }
+    if (updateDeviceDto.device_uid) {
+      device.device_uid = updateDeviceDto.device_uid;
+    }
+    if (updateDeviceDto.gpio_pin) {
+      device.gpio_pin = updateDeviceDto.gpio_pin;
+    }
+    if (updateDeviceDto.camera_uid !== undefined) {
+      device.camera_uid = updateDeviceDto.camera_uid;
     }
 
     return await this.deviceRepository.save(device);

@@ -66,9 +66,6 @@ import { Device } from './devices/entities/device.entity';
   controllers: [
     RecognitionController, // Controller received from ESP32-CAM
   ],
-  providers: [
-    AppGateway, // Provider for WebSocket (sending commands)
-    JwtStrategy,
-  ],
+  providers: [AppGateway, JwtStrategy],
 })
 export class AppModule {}

@@ -17,9 +17,8 @@ export enum DeviceType {
 export class Device {
   @PrimaryGeneratedColumn()
   device_id: number;
-
-  @Column({ unique: true })
-  device_uid: string; // MAC Address từ ESP32
+  @Column()
+  device_uid: string;
 
   @Column()
   device_name: string;
@@ -27,11 +26,16 @@ export class Device {
   @Column({
     type: 'enum',
     enum: DeviceType,
-    default: DeviceType.CAM,
+    default: DeviceType.LOCK,
   })
   device_type: DeviceType;
 
-  // Liên kết với User
+  @Column({ nullable: true })
+  camera_uid: string;
+
+  @Column({ default: 13 })
+  gpio_pin: number;
+
   @Column()
   user_id: number;
 

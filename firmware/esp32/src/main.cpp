@@ -48,12 +48,12 @@ void callback(char *topic, byte *payload, unsigned int length)
   // Kiểm tra lệnh
   if (msg == "OPEN_DOOR")
   {
-    Serial.println(">>> LỆNH: MỞ CỬA MQTT");
+    Serial.println("LỆNH: MỞ CỬA MQTT");
     myServo.write(90);
-    // Dùng millis để tránh delay chặn kết nối MQTT
+
     delay(2000);
     myServo.write(0);
-    Serial.println(">>> Đã đóng cửa");
+    Serial.println("Đã đóng cửa");
   }
 }
 

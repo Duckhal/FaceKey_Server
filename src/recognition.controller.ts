@@ -43,37 +43,32 @@ export class RecognitionController {
     private deviceRepository: Repository<Device>,
   ) {}
 
-  // Mở cửa từ xa qua app
+  // API 1: Mở cửa từ xa
   @UseGuards(JwtAuthGuard)
   @Post('open')
-  async remoteOpen(@Body('device_uid') deviceUid: string, @Request() req) {
+  async remoteOpen(@Body('device_uid') servoUid: string, @Request() req) {
     const userId = req.user.userId;
 
+    // 1. Tìm thiết bị Cửa dựa trên MAC Servo (device_uid)
     const device = await this.deviceRepository.findOne({
       where: {
-        device_uid: deviceUid,
+        device_uid: servoUid,
         user: { user_id: userId },
       },
     });
 
-    if (!device) {
-      throw new ForbiddenException('Device not found or access denied.');
-    }
+    if (!device) throw new ForbiddenException('Device not found');
+    if (device.device_type !== DeviceType.LOCK)
+      throw new BadRequestException('Not a LOCK');
 
-    // KIỂM TRA device_type - CHỈ CHO PHÉP LOCK
-    if (device.device_type !== DeviceType.LOCK) {
-      throw new BadRequestException(
-        'This device is not a LOCK type. Cannot open door.',
-      );
-    }
-
+    const commandStr = `${device.gpio_pin}:OPEN_DOOR`;
     this.appGateway.sendCommandToDevice(userId, {
-      command: 'OPEN_DOOR',
-      from_device: deviceUid,
+      command: commandStr,
+      from_device: servoUid,
       timestamp: new Date().toISOString(),
     });
 
-    // 2. SỬA DÙNG ENUM
+    // 3. Ghi log
     const logEntry = this.accessLogRepository.create({
       member_name_snapshot: 'Remote App Control',
       action: AccessAction.GRANTED_REMOTE,
@@ -85,7 +80,7 @@ export class RecognitionController {
     return { message: 'Open command sent', success: true };
   }
 
-  // Nhận diện khuôn mặt
+  // API 2: Nhận diện khuôn mặt
   @Post('recognize')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -106,24 +101,25 @@ export class RecognitionController {
   )
   async handleRecognition(
     @UploadedFile() file: Express.Multer.File,
-    @Headers('x-device-uid') deviceUid: string,
+    @Headers('x-device-uid') cameraUid: string,
   ) {
-    if (!deviceUid) {
+    if (!cameraUid) {
       this.cleanupFile(file.path);
       return { message: 'Missing x-device-uid header' };
     }
 
-    const device = await this.deviceRepository.findOne({
-      where: { device_uid: deviceUid },
+    const linkedDoor = await this.deviceRepository.findOne({
+      where: { camera_uid: cameraUid },
       relations: ['user'],
     });
 
-    if (!device) {
+    if (!linkedDoor) {
       this.cleanupFile(file.path);
-      return { message: 'Device not registered' };
+      console.log(`Camera ${cameraUid} is not linked to any Door in DB.`);
+      return { message: 'Camera not configured for any door' };
     }
 
-    const owner = device.user;
+    const owner = linkedDoor.user;
 
     let aiResponse;
     try {
@@ -145,12 +141,16 @@ export class RecognitionController {
     });
 
     const bestMatch = this.findBestMatch(aiResponse.embedding, registeredFaces);
-    const RECOGNITION_THRESHOLD = 0.8;
+    const RECOGNITION_THRESHOLD = 0.6;
     let logEntry;
 
     if (bestMatch && bestMatch.distance < RECOGNITION_THRESHOLD) {
+      // MATCH OK
       const matchedMember = bestMatch.face.member;
 
+      console.log(
+        `Face Matched via CAM ${cameraUid} => Opening Door ${linkedDoor.device_uid}`,
+      );
       const lockDevice = await this.deviceRepository.findOne({
         where: {
           user: { user_id: owner.user_id },
@@ -159,13 +159,13 @@ export class RecognitionController {
       });
 
       if (lockDevice) {
+        const commandStr = `${lockDevice.gpio_pin}:OPEN_DOOR`;
+
         this.appGateway.sendCommandToDevice(owner.user_id, {
-          command: 'OPEN_DOOR',
+          command: commandStr,
           from_device: lockDevice.device_uid,
           timestamp: new Date().toISOString(),
         });
-      } else {
-        console.warn(`No LOCK device found for user ${owner.user_id}`);
       }
 
       logEntry = this.accessLogRepository.create({
