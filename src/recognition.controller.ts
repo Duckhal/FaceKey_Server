@@ -67,14 +67,6 @@ export class RecognitionController {
       timestamp: new Date().toISOString(),
     });
 
-    const logEntry = this.accessLogRepository.create({
-      member_name_snapshot: 'Remote App Control',
-      action: AccessAction.GRANTED_REMOTE,
-      snapshot_url: undefined,
-      user: { user_id: userId },
-    });
-    await this.accessLogRepository.save(logEntry);
-
     return { message: 'Open command sent', success: true };
   }
 

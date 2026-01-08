@@ -2,9 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException, // <--- Thêm ConflictException
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Not } from 'typeorm'; // <--- Thêm Not
 import { Door } from './entities/door.entity';
 import { CreateDoorDto } from './dto/create-door.dto';
 import { UpdateDoorDto } from './dto/update-door.dto';
@@ -19,8 +20,29 @@ export class DoorsService {
     private devicesRepository: Repository<Device>,
   ) {}
 
+  //HÀM KIỂM TRA TRÙNG PIN
+  private async checkPinConflict(
+    lockDeviceId: number,
+    gpioPin: number,
+    excludeDoorId?: number,
+  ) {
+    const existingDoor = await this.doorsRepository.findOne({
+      where: {
+        lock_device_id: lockDeviceId,
+        gpio_pin: gpioPin,
+        ...(excludeDoorId ? { id: Not(excludeDoorId) } : {}),
+      },
+    });
+
+    if (existingDoor) {
+      throw new ConflictException(
+        `GPIO Pin ${gpioPin} is already used by door "${existingDoor.name}" on this device.`,
+      );
+    }
+  }
+
   async create(createDoorDto: CreateDoorDto, userId: number) {
-    // 1. Kiểm tra Lock Device có tồn tại và thuộc về User không
+    // 1. Kiểm tra Lock Device
     const lock = await this.devicesRepository.findOne({
       where: {
         device_id: createDoorDto.lock_device_id,
@@ -34,7 +56,13 @@ export class DoorsService {
       );
     }
 
-    // 2. Kiểm tra Camera Device (nếu có)
+    // 2. KIỂM TRA TRÙNG PIN
+    await this.checkPinConflict(
+      createDoorDto.lock_device_id,
+      createDoorDto.gpio_pin,
+    );
+
+    // 3. Kiểm tra Camera Device
     if (createDoorDto.camera_device_id) {
       const cam = await this.devicesRepository.findOne({
         where: {
@@ -47,7 +75,7 @@ export class DoorsService {
       }
     }
 
-    // 3. Tạo cửa
+    // 4. Tạo cửa
     const newDoor = this.doorsRepository.create({
       ...createDoorDto,
       user: { user_id: userId },
@@ -75,6 +103,27 @@ export class DoorsService {
 
   async update(id: number, updateDoorDto: UpdateDoorDto, userId: number) {
     const door = await this.findOne(id, userId);
+    const newLockId = updateDoorDto.lock_device_id ?? door.lock_device_id;
+    const newPin = updateDoorDto.gpio_pin ?? door.gpio_pin;
+
+    if (
+      updateDoorDto.lock_device_id !== undefined ||
+      updateDoorDto.gpio_pin !== undefined
+    ) {
+      await this.checkPinConflict(newLockId, newPin, id);
+    }
+
+    if (updateDoorDto.lock_device_id) {
+      const lock = await this.devicesRepository.findOne({
+        where: {
+          device_id: updateDoorDto.lock_device_id,
+          user: { user_id: userId },
+        },
+      });
+      if (!lock || lock.device_type !== DeviceType.LOCK) {
+        throw new BadRequestException('Invalid Lock Device');
+      }
+    }
 
     Object.assign(door, updateDoorDto);
     return await this.doorsRepository.save(door);
