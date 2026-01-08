@@ -8,7 +8,6 @@ import {
   UseGuards,
   Request,
   ForbiddenException,
-  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -26,7 +25,8 @@ import {
   AccessLog,
   AccessAction,
 } from './accesslogs/entities/accesslog.entity';
-import { Device, DeviceType } from './devices/entities/device.entity';
+import { Device } from './devices/entities/device.entity';
+import { Door } from './doors/entities/door.entity';
 import { AI_SERVICE_URL } from 'ip_config';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
@@ -41,34 +41,32 @@ export class RecognitionController {
     private accessLogRepository: Repository<AccessLog>,
     @InjectRepository(Device)
     private deviceRepository: Repository<Device>,
+    @InjectRepository(Door)
+    private doorRepository: Repository<Door>,
   ) {}
 
-  // API 1: Mở cửa từ xa
   @UseGuards(JwtAuthGuard)
   @Post('open')
-  async remoteOpen(@Body('device_uid') servoUid: string, @Request() req) {
+  async remoteOpen(@Body('door_id') doorId: number, @Request() req) {
     const userId = req.user.userId;
 
-    // 1. Tìm thiết bị Cửa dựa trên MAC Servo (device_uid)
-    const device = await this.deviceRepository.findOne({
-      where: {
-        device_uid: servoUid,
-        user: { user_id: userId },
-      },
+    const door = await this.doorRepository.findOne({
+      where: { id: doorId, user: { user_id: userId } },
+      relations: ['lockDevice'],
     });
 
-    if (!device) throw new ForbiddenException('Device not found');
-    if (device.device_type !== DeviceType.LOCK)
-      throw new BadRequestException('Not a LOCK');
+    if (!door || !door.lockDevice) {
+      throw new ForbiddenException('Door not found or Lock device missing.');
+    }
 
-    const commandStr = `${device.gpio_pin}:OPEN_DOOR`;
+    const commandStr = `${door.gpio_pin}:OPEN_DOOR`;
+
     this.appGateway.sendCommandToDevice(userId, {
       command: commandStr,
-      from_device: servoUid,
+      from_device: door.lockDevice.device_uid,
       timestamp: new Date().toISOString(),
     });
 
-    // 3. Ghi log
     const logEntry = this.accessLogRepository.create({
       member_name_snapshot: 'Remote App Control',
       action: AccessAction.GRANTED_REMOTE,
@@ -80,7 +78,6 @@ export class RecognitionController {
     return { message: 'Open command sent', success: true };
   }
 
-  // API 2: Nhận diện khuôn mặt
   @Post('recognize')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -108,9 +105,13 @@ export class RecognitionController {
       return { message: 'Missing x-device-uid header' };
     }
 
-    const linkedDoor = await this.deviceRepository.findOne({
-      where: { camera_uid: cameraUid },
-      relations: ['user'],
+    console.log(`Snapshot received from Camera Device: ${cameraUid}`);
+
+    const linkedDoor = await this.doorRepository.findOne({
+      where: {
+        cameraDevice: { device_uid: cameraUid },
+      },
+      relations: ['user', 'lockDevice'],
     });
 
     if (!linkedDoor) {
@@ -145,25 +146,18 @@ export class RecognitionController {
     let logEntry;
 
     if (bestMatch && bestMatch.distance < RECOGNITION_THRESHOLD) {
-      // MATCH OK
       const matchedMember = bestMatch.face.member;
 
       console.log(
-        `Face Matched via CAM ${cameraUid} => Opening Door ${linkedDoor.device_uid}`,
+        `Face Matched via CAM ${cameraUid} => Opening Door ID ${linkedDoor.id} (Lock: ${linkedDoor.lockDevice?.device_uid})`,
       );
-      const lockDevice = await this.deviceRepository.findOne({
-        where: {
-          user: { user_id: owner.user_id },
-          device_type: DeviceType.LOCK,
-        },
-      });
 
-      if (lockDevice) {
-        const commandStr = `${lockDevice.gpio_pin}:OPEN_DOOR`;
+      if (linkedDoor.lockDevice) {
+        const commandStr = `${linkedDoor.gpio_pin}:OPEN_DOOR`;
 
         this.appGateway.sendCommandToDevice(owner.user_id, {
           command: commandStr,
-          from_device: lockDevice.device_uid,
+          from_device: linkedDoor.lockDevice.device_uid,
           timestamp: new Date().toISOString(),
         });
       }
@@ -176,6 +170,7 @@ export class RecognitionController {
         user: owner,
       });
     } else {
+      console.log('Unrecognized face');
       logEntry = this.accessLogRepository.create({
         member_name_snapshot: 'Unknown',
         action: AccessAction.DENIED,
@@ -190,7 +185,6 @@ export class RecognitionController {
     return { message: 'Process complete', result: savedLog };
   }
 
-  // Helper Functions
   private async realAiServiceCall(filePath: string): Promise<any> {
     const formData = new FormData();
     formData.append('file', fs.createReadStream(filePath));

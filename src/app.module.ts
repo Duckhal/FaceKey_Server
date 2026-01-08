@@ -19,6 +19,8 @@ import { HttpModule } from '@nestjs/axios';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { DevicesModule } from './devices/devices.module';
 import { Device } from './devices/entities/device.entity';
+import { DoorsModule } from './doors/doors.module';
+import { Door } from './doors/entities/door.entity';
 
 @Module({
   imports: [
@@ -44,7 +46,7 @@ import { Device } from './devices/entities/device.entity';
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      entities: [User, Member, FaceData, AccessLog, Device],
+      entities: [User, Member, FaceData, AccessLog, Device, Door],
       synchronize: true,
     }),
 
@@ -59,13 +61,14 @@ import { Device } from './devices/entities/device.entity';
       rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
     }),
-    TypeOrmModule.forFeature([FaceData, AccessLog, Device]),
+
+    TypeOrmModule.forFeature([FaceData, AccessLog, Device, Door]),
+
     DevicesModule,
+    DoorsModule,
   ],
 
-  controllers: [
-    RecognitionController, // Controller received from ESP32-CAM
-  ],
+  controllers: [RecognitionController],
   providers: [AppGateway, JwtStrategy],
 })
 export class AppModule {}

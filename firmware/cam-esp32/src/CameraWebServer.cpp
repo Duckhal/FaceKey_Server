@@ -6,9 +6,10 @@
 const char *ssid = "Galaxy A53 5G 5CC2";
 const char *password = "oysl4029";
 
-const char *server_ip = "192.168.34.16";
+const char *server_ip = "192.168.166.16";
 const int server_port = 3000;
 const char *server_endpoint = "/api/recognition/recognize";
+String device_uid = "";
 
 #include "board_config.h"
 
@@ -120,14 +121,18 @@ void sendPhoto()
   }
   Serial.println("Đã kết nối. Đang gửi request...");
 
+  // 4. Gửi HTTP Request Header (phần tiêu đề) thủ công
+  // Gửi dòng POST và các header
   client.print(String("POST ") + server_endpoint + " HTTP/1.1\r\n");
   client.print(String("Host: ") + server_ip + "\r\n");
   client.print(String("x-device-uid: ") + macAddr + "\r\n");
   client.print("Connection: close\r\n");
   client.print(String("Content-Length: ") + total_len + "\r\n");
   client.print(String("Content-Type: multipart/form-data; boundary=") + boundary + "\r\n");
-  client.print("\r\n");
+  client.print("\r\n"); // Dòng trống kết thúc header
 
+  // 5. Gửi Body (payload) theo 3 phần (đây là streaming)
+  // Phần 1: Gửi "body_start"
   client.print(body_start);
 
   // Phần 2: Gửi dữ liệu ảnh (fb->buf)
@@ -143,12 +148,10 @@ void sendPhoto()
     delay(1);
   }
 
-  // Phần 3: Gửi "body_end"
   client.print(body_end);
 
   Serial.println("Gửi ảnh hoàn tất. Đang chờ phản hồi...");
 
-  // 6. Đọc phản hồi từ Server
   String response = "";
   long timeout = millis();
   while (client.connected() || client.available())
@@ -157,26 +160,19 @@ void sendPhoto()
     {
       char c = client.read();
       response += c;
-      timeout = millis(); // Reset timeout khi có dữ liệu
+      timeout = millis();
     }
-    // Timeout sau 5 giây nếu server không trả lời
     if (millis() - timeout > 5000)
     {
       Serial.println("Client timeout!");
       break;
     }
   }
-  // client.stop(); // Ngắt kết nối
-  // Serial.println("Đã ngắt kết nối.");
-  // Serial.println("--- Phản hồi từ Server ---");
-  // Serial.println(response);
-  // Serial.println("--------------------------");
 
   // 7. Dọn dẹp
   esp_camera_fb_return(fb);
 }
 
-// HÀM SETUP CHÍNH
 void setup()
 {
   Serial.begin(115200);
@@ -186,7 +182,6 @@ void setup()
   setupWifi();
   Serial.print("DEVICE MAC ADDRESS: ");
   Serial.println(WiFi.macAddress());
-  Serial.println("Hãy dùng mã này để đăng ký trong App.");
   setupCamera();
 
   Serial.println("Thực hiện 1 lần chụp nháp để 'làm nóng' camera...");
@@ -199,7 +194,6 @@ void setup()
   Serial.println("Thiết lập hoàn tất.");
 }
 
-// HÀM LOOP CHÍNH
 void loop()
 {
   Serial.println("Chờ 3 giây trước khi gửi ảnh tiếp theo...");
