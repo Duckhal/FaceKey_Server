@@ -5,17 +5,85 @@
 
 const char *ssid = "Galaxy A53 5G 5CC2";
 const char *password = "oysl4029";
-
 const char *mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 
-#define SERVO_PIN 13
-
-Servo myServo;
 WiFiClient espClient;
 PubSubClient client(espClient);
 String device_uid = "";
 String topic_command = "";
+
+void controlDoor(int pin)
+{
+  Serial.print("Đang điều khiển Cửa ở chân GPIO: ");
+  Serial.println(pin);
+
+  Servo dynamicServo;
+  dynamicServo.setPeriodHertz(50);
+  dynamicServo.attach(pin, 500, 2400);
+
+  // Mở
+  dynamicServo.write(90);
+  delay(2000);
+
+  // Đóng
+  dynamicServo.write(0);
+  delay(500);
+  dynamicServo.detach();
+
+  Serial.println("Đã đóng cửa và ngắt Servo.");
+}
+
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+
+  String msg = "";
+  for (unsigned int i = 0; i < length; i++)
+  {
+    msg += (char)payload[i];
+  }
+  Serial.println(msg);
+
+  // 1. Tìm vị trí dấu hai chấm ":"
+  int colonIndex = msg.indexOf(':');
+
+  if (colonIndex != -1)
+  {
+    // 2. Tách chuỗi
+    String pinStr = msg.substring(0, colonIndex);
+    String command = msg.substring(colonIndex + 1);
+
+    // 3. Chuyển Pin sang số nguyên
+    int pin = pinStr.toInt();
+
+    // 4. Kiểm tra lệnh
+    if (command == "OPEN_DOOR")
+    {
+      if (pin > 0)
+      {
+        controlDoor(pin);
+      }
+      else
+      {
+        Serial.println("Lỗi: Số Pin không hợp lệ!");
+      }
+    }
+    else
+    {
+      Serial.println("Lỗi: Lệnh không xác định!");
+    }
+  }
+  else
+  {
+    if (msg == "OPEN_DOOR")
+    {
+      controlDoor(13);
+    }
+  }
+}
 
 void setup_wifi()
 {
@@ -32,34 +100,8 @@ void setup_wifi()
   Serial.println("\nWiFi connected");
 }
 
-void callback(char *topic, byte *payload, unsigned int length)
-{
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-
-  String msg = "";
-  for (unsigned int i = 0; i < length; i++)
-  {
-    msg += (char)payload[i];
-  }
-  Serial.println(msg);
-
-  // Kiểm tra lệnh
-  if (msg == "OPEN_DOOR")
-  {
-    Serial.println("LỆNH: MỞ CỬA MQTT");
-    myServo.write(90);
-
-    delay(2000);
-    myServo.write(0);
-    Serial.println("Đã đóng cửa");
-  }
-}
-
 void reconnect()
 {
-  // Lặp cho đến khi kết nối lại được
   while (!client.connected())
   {
     Serial.print("Attempting MQTT connection...");
@@ -86,15 +128,8 @@ void reconnect()
 void setup()
 {
   Serial.begin(115200);
-
-  // Setup Servo
-  myServo.setPeriodHertz(50);
-  myServo.attach(SERVO_PIN, 500, 2400);
-  myServo.write(0);
-
   setup_wifi();
 
-  // Tạo topic dựa trên MAC Address
   device_uid = WiFi.macAddress();
   topic_command = "device/" + device_uid + "/command";
 
