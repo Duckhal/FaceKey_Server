@@ -3,6 +3,7 @@ import {
   Column,
   PrimaryGeneratedColumn,
   ManyToOne,
+  OneToOne,
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
@@ -16,13 +17,11 @@ export class Door {
   id: number;
 
   @Column()
-  name: string; // Ví dụ: "Cửa Chính", "Cửa Hậu"
+  name: string;
 
-  // Chân Pin mà Servo của cửa này nối vào
   @Column()
   gpio_pin: number;
 
-  // --- LIÊN KẾT: Cửa này dùng Thiết bị Lock nào? ---
   @ManyToOne(() => Device, { onDelete: 'SET NULL' })
   @JoinColumn({ name: 'lock_device_id' })
   lockDevice: Device;
@@ -30,8 +29,7 @@ export class Door {
   @Column({ nullable: true })
   lock_device_id: number;
 
-  // --- LIÊN KẾT: Cửa này dùng Camera nào? (Optional) ---
-  @ManyToOne(() => Device, { onDelete: 'SET NULL', nullable: true })
+  @OneToOne(() => Device, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'camera_device_id' })
   cameraDevice: Device;
 
