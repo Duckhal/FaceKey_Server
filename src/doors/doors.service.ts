@@ -20,7 +20,7 @@ export class DoorsService {
     private devicesRepository: Repository<Device>,
   ) {}
 
-  //HÀM KIỂM TRA TRÙNG PIN
+  // --- HÀM KIỂM TRA TRÙNG PIN ---
   private async checkPinConflict(
     lockDeviceId: number,
     gpioPin: number,
@@ -37,6 +37,24 @@ export class DoorsService {
     if (existingDoor) {
       throw new ConflictException(
         `GPIO Pin ${gpioPin} is already used by door "${existingDoor.name}" on this device.`,
+      );
+    }
+  }
+
+  // --- HÀM KIỂM TRA TRÙNG CAMERA (MỚI THÊM) ---
+  private async checkCameraConflict(cameraId: number, excludeDoorId?: number) {
+    if (!cameraId) return; // Nếu không gửi camera lên thì bỏ qua
+
+    const existingDoor = await this.doorsRepository.findOne({
+      where: {
+        camera_device_id: cameraId,
+        ...(excludeDoorId ? { id: Not(excludeDoorId) } : {}),
+      },
+    });
+
+    if (existingDoor) {
+      throw new ConflictException(
+        `This camera is already assigned to door "${existingDoor.name}". Please choose another camera.`,
       );
     }
   }
@@ -73,6 +91,8 @@ export class DoorsService {
       if (!cam || cam.device_type !== DeviceType.CAM) {
         throw new BadRequestException('Invalid Camera Device');
       }
+
+      await this.checkCameraConflict(createDoorDto.camera_device_id);
     }
 
     // 4. Tạo cửa
@@ -97,7 +117,7 @@ export class DoorsService {
       where: { id, user: { user_id: userId } },
       relations: ['lockDevice', 'cameraDevice'],
     });
-    if (!door) throw new NotFoundException(`Door #${id} not found`);
+    if (!door) throw new NotFoundException(`Not found`);
     return door;
   }
 
@@ -106,6 +126,7 @@ export class DoorsService {
     const newLockId = updateDoorDto.lock_device_id ?? door.lock_device_id;
     const newPin = updateDoorDto.gpio_pin ?? door.gpio_pin;
 
+    // Check trùng Pin
     if (
       updateDoorDto.lock_device_id !== undefined ||
       updateDoorDto.gpio_pin !== undefined
@@ -113,6 +134,22 @@ export class DoorsService {
       await this.checkPinConflict(newLockId, newPin, id);
     }
 
+    // Check Camera
+    if (updateDoorDto.camera_device_id) {
+      const cam = await this.devicesRepository.findOne({
+        where: {
+          device_id: updateDoorDto.camera_device_id,
+          user: { user_id: userId },
+        },
+      });
+      if (!cam || cam.device_type !== DeviceType.CAM) {
+        throw new BadRequestException('Invalid Camera Device');
+      }
+
+      await this.checkCameraConflict(updateDoorDto.camera_device_id, id);
+    }
+
+    // Check Lock Device
     if (updateDoorDto.lock_device_id) {
       const lock = await this.devicesRepository.findOne({
         where: {
@@ -134,8 +171,7 @@ export class DoorsService {
       id,
       user: { user_id: userId },
     });
-    if (result.affected === 0)
-      throw new NotFoundException(`Door #${id} not found`);
+    if (result.affected === 0) throw new NotFoundException(`Not found`);
     return { message: 'Door deleted successfully' };
   }
 }

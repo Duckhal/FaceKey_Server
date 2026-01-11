@@ -2,16 +2,30 @@
 #include <WiFi.h>
 #include "esp_camera.h"
 #include "HTTPClient.h"
+#include <WiFiManager.h> // Thư viện quản lý WiFi
+#include <Preferences.h> // Thư viện lưu trữ dữ liệu vào bộ nhớ Flash
 
-const char *ssid = "Galaxy A53 5G 5CC2";
-const char *password = "oysl4029";
+// CẤU HÌNH WIFI CỨNG (HARDCODED)
+const char *ssid_fix = "GalaxyA53";
+const char *pass_fix = "oysl4029";
 
-const char *server_ip = "192.168.166.16";
+// CẤU HÌNH SERVER MẶC ĐỊNH
+char server_ip[40] = "192.168.1.10"; // Giá trị mặc định nếu chưa cài đặt
 const int server_port = 3000;
 const char *server_endpoint = "/api/recognition/recognize";
-String device_uid = "";
 
-#include "board_config.h"
+// Khai báo đối tượng
+Preferences preferences;       // Để lưu IP vào bộ nhớ
+bool shouldSaveConfig = false; // Cờ kiểm tra xem có cần lưu cấu hình không
+
+#include "board_config.h" // File chứa định nghĩa chân camera (AI THINKER)
+
+// CẤU HÌNH CALLBACK KHI NGƯỜI DÙNG BẤM LƯU CẤU HÌNH
+void saveConfigCallback()
+{
+  Serial.println("Phát hiện thay đổi cấu hình -> Cần lưu lại");
+  shouldSaveConfig = true;
+}
 
 void setupCamera()
 {
@@ -39,7 +53,6 @@ void setupCamera()
 
   if (psramFound())
   {
-    Serial.println("PSRAM đã tìm thấy! Dùng UXGA.");
     config.frame_size = FRAMESIZE_UXGA;
     config.jpeg_quality = 10;
     config.fb_count = 2;
@@ -48,94 +61,70 @@ void setupCamera()
   }
   else
   {
-    Serial.println("Không tìm thấy PSRAM! Dùng HD.");
-    config.frame_size = FRAMESIZE_HD; // (1280x720)
+    config.frame_size = FRAMESIZE_HD;
     config.jpeg_quality = 12;
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
-  // Khởi tạo camera
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK)
   {
-    Serial.printf("Khởi tạo camera thất bại! Lỗi 0x%x", err);
+    Serial.printf("Camera Init Failed Error 0x%x", err);
     delay(5000);
     ESP.restart();
-    return;
   }
-  Serial.println("Khởi tạo camera thành công.");
-}
-
-// Hàm khởi tạo WiFi
-void setupWifi()
-{
-  WiFi.begin(ssid, password);
-  Serial.print("Đang kết nối Wi-Fi...");
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nĐã kết nối Wi-Fi!");
-  Serial.print("Địa chỉ IP: ");
-  Serial.println(WiFi.localIP());
 }
 
 void sendPhoto()
 {
-  Serial.println("Đang chụp ảnh...");
-  camera_fb_t *fb = NULL;
+  Serial.println("\n--- Bắt đầu quy trình gửi ảnh ---");
 
-  fb = esp_camera_fb_get();
+  // 1. Chụp ảnh
+  camera_fb_t *fb = esp_camera_fb_get();
   if (!fb)
   {
-    Serial.println("Chụp ảnh thất bại (Camera capture failed)");
+    Serial.println("Lỗi: Không chụp được ảnh");
     return;
   }
-  Serial.printf("Chụp ảnh thành công. Kích thước: %u bytes\n", fb->len);
+  Serial.printf("Chụp thành công: %u bytes\n", fb->len);
 
+  // 2. Chuẩn bị Header Multipart
   String macAddr = WiFi.macAddress();
-
   String boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
   String body_start = "--" + boundary + "\r\n";
   body_start += "Content-Disposition: form-data; name=\"file\"; filename=\"image.jpg\"\r\n";
   body_start += "Content-Type: image/jpeg\r\n\r\n";
-
   String body_end = "\r\n--" + boundary + "--\r\n";
 
   size_t total_len = body_start.length() + fb->len + body_end.length();
 
+  // 3. Kết nối Server
   WiFiClient client;
-
-  Serial.print("Đang kết nối tới server: ");
-  Serial.print(server_ip);
-  Serial.print(":");
+  Serial.print("Đang kết nối tới Server IP: ");
+  Serial.print(server_ip); // Sử dụng biến dynamic IP
+  Serial.print(" : ");
   Serial.println(server_port);
 
   if (!client.connect(server_ip, server_port))
   {
-    Serial.println("Kết nối thất bại!");
+    Serial.println("Kết nối Server thất bại! Kiểm tra IP hoặc Firewall.");
     esp_camera_fb_return(fb);
     return;
   }
-  Serial.println("Đã kết nối. Đang gửi request...");
 
-  // 4. Gửi HTTP Request Header (phần tiêu đề) thủ công
-  // Gửi dòng POST và các header
+  // 4. Gửi Request
   client.print(String("POST ") + server_endpoint + " HTTP/1.1\r\n");
   client.print(String("Host: ") + server_ip + "\r\n");
   client.print(String("x-device-uid: ") + macAddr + "\r\n");
   client.print("Connection: close\r\n");
   client.print(String("Content-Length: ") + total_len + "\r\n");
   client.print(String("Content-Type: multipart/form-data; boundary=") + boundary + "\r\n");
-  client.print("\r\n"); // Dòng trống kết thúc header
+  client.print("\r\n");
 
-  // 5. Gửi Body (payload) theo 3 phần (đây là streaming)
-  // Phần 1: Gửi "body_start"
   client.print(body_start);
 
-  // Phần 2: Gửi dữ liệu ảnh (fb->buf)
+  // Gửi binary ảnh theo chunk
   size_t buff_len = fb->len;
   uint8_t *buff_ptr = fb->buf;
   size_t chunk_size = 1024;
@@ -145,58 +134,133 @@ void sendPhoto()
     client.write(buff_ptr, len_to_write);
     buff_ptr += len_to_write;
     buff_len -= len_to_write;
-    delay(1);
   }
 
   client.print(body_end);
+  Serial.println("Đã gửi dữ liệu. Đang chờ phản hồi...");
 
-  Serial.println("Gửi ảnh hoàn tất. Đang chờ phản hồi...");
-
-  String response = "";
+  // 5. Đọc phản hồi
   long timeout = millis();
   while (client.connected() || client.available())
   {
     if (client.available())
     {
-      char c = client.read();
-      response += c;
+      String line = client.readStringUntil('\n');
+      // In ra phản hồi để debug nếu cần
+      // Serial.println(line);
       timeout = millis();
     }
     if (millis() - timeout > 5000)
     {
-      Serial.println("Client timeout!");
+      Serial.println("Timeout khi chờ phản hồi!");
       break;
     }
   }
 
-  // 7. Dọn dẹp
+  client.stop();
   esp_camera_fb_return(fb);
+  Serial.println("Hoàn tất gửi ảnh.");
 }
 
 void setup()
 {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-  Serial.println("Khởi động ESP32-CAM (HTTP POST Client)...");
+  Serial.println("\nKhởi động ESP32-CAM...");
 
-  setupWifi();
-  Serial.print("DEVICE MAC ADDRESS: ");
-  Serial.println(WiFi.macAddress());
-  setupCamera();
+  // 1. LẤY IP SERVER TỪ BỘ NHỚ
+  preferences.begin("cam_config", false); // Mở namespace "cam_config"
+  String saved_ip = preferences.getString("server_ip", "");
 
-  Serial.println("Thực hiện 1 lần chụp nháp để 'làm nóng' camera...");
-  camera_fb_t *fb_dummy = esp_camera_fb_get();
-  if (fb_dummy)
+  if (saved_ip.length() > 0)
   {
-    esp_camera_fb_return(fb_dummy);
+    Serial.print("Đã tìm thấy IP Server đã lưu: ");
+    Serial.println(saved_ip);
+    saved_ip.toCharArray(server_ip, 40); // Copy vào biến toàn cục
+  }
+  else
+  {
+    Serial.println("Chưa có IP Server lưu, dùng mặc định.");
   }
 
-  Serial.println("Thiết lập hoàn tất.");
+  // 2. THỬ KẾT NỐI WIFI CỨNG TRƯỚC
+  Serial.print("Đang thử kết nối WiFi ưu tiên: ");
+  Serial.println(ssid_fix);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid_fix, pass_fix);
+
+  int retry = 0;
+  bool hardcoded_success = false;
+  while (retry < 20)
+  { // Thử khoảng 10 giây
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      hardcoded_success = true;
+      break;
+    }
+    delay(500);
+    Serial.print(".");
+    retry++;
+  }
+
+  // 3. NẾU THẤT BẠI -> DÙNG WIFI MANAGER
+  if (hardcoded_success)
+  {
+    Serial.println("\n>> Kết nối thành công WiFi cứng!");
+  }
+  else
+  {
+    Serial.println("\n>> Kết nối WiFi cứng thất bại. Chuyển sang WiFi Manager AP...");
+
+    WiFiManager wm;
+    wm.setSaveConfigCallback(saveConfigCallback); // Đăng ký hàm callback
+
+    // TẠO Ô NHẬP LIỆU CHO IP SERVER
+    // id, label, default value, length
+    WiFiManagerParameter custom_server_ip("server_ip", "Server IP Address (Backend)", server_ip, 40);
+    wm.addParameter(&custom_server_ip);
+
+    // Tự động kết nối hoặc tạo AP tên "ESP32_CAM_Config"
+    // IP mặc định của trang cấu hình: 192.168.4.1
+    if (!wm.autoConnect("ESP32_CAM_Config", "12345678"))
+    {
+      Serial.println("Lỗi kết nối hoặc timeout.");
+      ESP.restart();
+    }
+
+    // 4. LƯU CẤU HÌNH MỚI NẾU CÓ
+    Serial.println("\n>> Đã kết nối WiFi qua Portal!");
+
+    // Đọc giá trị từ ô nhập liệu
+    strcpy(server_ip, custom_server_ip.getValue());
+
+    if (shouldSaveConfig)
+    {
+      Serial.print("Đang lưu IP Server mới vào Flash: ");
+      Serial.println(server_ip);
+      preferences.putString("server_ip", server_ip);
+    }
+  }
+
+  preferences.end(); // Đóng preferences
+
+  Serial.print("IP ESP32-CAM: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("BACKEND IP HIỆN TẠI: ");
+  Serial.println(server_ip);
+
+  // 5. KHỞI TẠO CAMERA
+  setupCamera();
+
+  // Chụp nháp
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb)
+    esp_camera_fb_return(fb);
 }
 
 void loop()
 {
-  Serial.println("Chờ 3 giây trước khi gửi ảnh tiếp theo...");
+  // Gửi ảnh mỗi 5 giây
   delay(5000);
   sendPhoto();
 }
